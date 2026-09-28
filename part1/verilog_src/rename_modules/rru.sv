@@ -50,15 +50,12 @@ module RRU (
     localparam logic [1:0] S_RV    = 2'b10;
     localparam logic [1:0] S_ARCH  = 2'b11;
  
-    // ------------------------------------------------------------------
     // Speculative RAT
-    // ------------------------------------------------------------------
     logic [ARCH_REG-1:0][PHYS_BIT-1:0] specRAT;
  
-    // ------------------------------------------------------------------
     // Free-register picker: lane i gets the (i+1)-th lowest AVAIL preg.
     // Simple serial version; a good optimization target for Task 7.
-    // ------------------------------------------------------------------
+
     logic [PHYS_REG-1:0]                avail_vec;
     logic [PPL_WIDTH-1:0][PHYS_BIT-1:0] free_preg;
     logic [PPL_WIDTH-1:0]               free_found;
@@ -85,9 +82,7 @@ module RRU (
     assign full  = !free_found[PPL_WIDTH-1];
     assign stall = 1'b0;   // may be used for Task 6 recovery
  
-    // ------------------------------------------------------------------
     // Source renaming with intra-batch forwarding
-    // ------------------------------------------------------------------
     logic [PPL_WIDTH-1:0][PHYS_BIT-1:0] src1_p, src2_p;
     logic [PPL_WIDTH-1:0]               src1_fwd, src2_fwd;
     logic [PPL_WIDTH-1:0]               src1_rdy, src2_rdy;
@@ -127,9 +122,7 @@ module RRU (
         end
     end
  
-    // ------------------------------------------------------------------
     // Build ROB / IQ entries
-    // ------------------------------------------------------------------
     always_comb begin
         for (int i = 0; i < PPL_WIDTH; i++) begin
             renamed_preg[i] = free_preg[i];
@@ -151,9 +144,7 @@ module RRU (
         end
     end
  
-    // ------------------------------------------------------------------
     // specRAT update
-    // ------------------------------------------------------------------
     always_ff @(posedge clk) begin
         if (reset) begin
             for (int a = 0; a < ARCH_REG; a++)
