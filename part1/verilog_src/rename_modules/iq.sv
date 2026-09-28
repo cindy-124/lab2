@@ -30,23 +30,35 @@ module IQ (
     logic [IQ_SIZE-1:0] issued, inserted;
     for (genvar X = 0; X < IQ_SIZE; X++) begin
         always_ff @(posedge clk) begin
-            if (reset)
+            if (reset) begin
                 entries[X] <= 'd0;
-            else if (issued[X])
+                //$display($time,,"[IQ %d] reset", X);
+            end else if (issued[X]) begin
                 // Currently prevents same-cycle issue and insert
                 entries[X].valid <= 1'b0;
-            else if (inserted[X]) begin
+                //$display($time,,"[IQ %d] issue", X);
+            end else if (inserted[X]) begin
                 // Some assumptions here on the validity of inserted_entry data
                 // Currently can not insert and update executed_preg on same cycle
                 entries[X] <= inserted_entry[X];
                 entries[X].valid <= 1'b1;
+                //$display($time,,"[IQ %d] insert", X);
             end else if (entries[X].valid) begin
                 // Check for preg match
+                //$display($time,,"[IQ %d] doing preg match", X);
                 for (int Y = 0; Y < PPL_WIDTH; Y++) begin
-                    if ((entries[X].src1 == executed_preg[Y]) && executed_mask[Y])
+                    /*
+                    $display($time,,"[IQ %d] src1: %d, src2: %d, ex_preg: %d, ex_mask %b", X, entries[X].src1,
+                        entries[X].src2, executed_preg[Y], executed_mask[Y]);
+                    $display($time,,"[IQ %d] %d == %d, %d", X, entries[X].src1, executed_preg[Y], entries[X].src1 == executed_preg[Y]);
+                    */
+                    if ((entries[X].src1 == executed_preg[Y]) && executed_mask[Y]) begin
+                        //$display($time,,"[IQ %d] src1 preg match", X);
                         entries[X].src1_ready <= 1'b1;
-                    if ((entries[X].src2 == executed_preg[Y]) && executed_mask[Y])
+                    end if ((entries[X].src2 == executed_preg[Y]) && executed_mask[Y]) begin
+                        //$display($time,,"[IQ %d] src2 preg match", X);
                         entries[X].src2_ready <= 1'b1;
+                    end
                 end
             end
         end
