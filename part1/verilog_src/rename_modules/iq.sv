@@ -106,8 +106,9 @@ module IQ (
     end
 
     // Full generation
+    int occupied_count;
     always_comb begin
-        int occupied_count = 0;
+        occupied_count = 0;
         for (int i = 0; i < IQ_SIZE; i++) begin
             if (entries[i].valid)
                 occupied_count += 1;

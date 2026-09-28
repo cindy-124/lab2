@@ -87,6 +87,7 @@ module RENAME_TOP (
     // Module instantiations
     RRU rru (.clk(clk), .reset(reset),
              .inserted_mask(inserted_mask), .inserted_entries(inserted_instructions),
+             .executed_mask(executed_mask), .executed_preg(executed_preg),
              .committed_mask(committed_mask), .removed_mask(removed_mask),
              .removed_preg(prf_removed_preg), .removed_areg(prf_removed_areg),
              .removed_is_branch(rru_removed_is_branch), .stall(rru_stall),
@@ -115,6 +116,5 @@ module RENAME_TOP (
            .issued_mask(issued_mask), .issued_entries(issued_entries),
            .full(iq_full),
            .flush_en(flush_en), .flush_index(flush_index), .rob_head(rob_head));
-
-
+    
 endmodule: RENAME_TOP
