@@ -30,35 +30,27 @@ module IQ (
     logic [IQ_SIZE-1:0] issued, inserted;
     for (genvar X = 0; X < IQ_SIZE; X++) begin
         always_ff @(posedge clk) begin
-            if (reset) begin
+            if (reset)
                 entries[X] <= 'd0;
-                //$display($time,,"[IQ %d] reset", X);
-            end else if (issued[X]) begin
+            else if (flush_en) begin
+                // flush_index may or may not be relative
+                if (entries[X].rob_index - rob_head > flush_index - rob_head)
+                    entries[X].valid <= 1'b0;
+            end else if (issued[X])
                 // Currently prevents same-cycle issue and insert
                 entries[X].valid <= 1'b0;
-                //$display($time,,"[IQ %d] issue", X);
-            end else if (inserted[X]) begin
+            else if (inserted[X]) begin
                 // Some assumptions here on the validity of inserted_entry data
                 // Currently can not insert and update executed_preg on same cycle
                 entries[X] <= inserted_entry[X];
                 entries[X].valid <= 1'b1;
-                //$display($time,,"[IQ %d] insert", X);
             end else if (entries[X].valid) begin
                 // Check for preg match
-                //$display($time,,"[IQ %d] doing preg match", X);
                 for (int Y = 0; Y < PPL_WIDTH; Y++) begin
-                    /*
-                    $display($time,,"[IQ %d] src1: %d, src2: %d, ex_preg: %d, ex_mask %b", X, entries[X].src1,
-                        entries[X].src2, executed_preg[Y], executed_mask[Y]);
-                    $display($time,,"[IQ %d] %d == %d, %d", X, entries[X].src1, executed_preg[Y], entries[X].src1 == executed_preg[Y]);
-                    */
-                    if ((entries[X].src1 == executed_preg[Y]) && executed_mask[Y]) begin
-                        //$display($time,,"[IQ %d] src1 preg match", X);
+                    if ((entries[X].src1 == executed_preg[Y]) && executed_mask[Y])
                         entries[X].src1_ready <= 1'b1;
-                    end if ((entries[X].src2 == executed_preg[Y]) && executed_mask[Y]) begin
-                        //$display($time,,"[IQ %d] src2 preg match", X);
+                    if ((entries[X].src2 == executed_preg[Y]) && executed_mask[Y])
                         entries[X].src2_ready <= 1'b1;
-                    end
                 end
             end
         end
@@ -79,6 +71,7 @@ module IQ (
     int num_inserts, idx;
     always_comb begin
         // Issue output and tracking setting
+
         num_wins = 'd0;
         winners = 'd0;
         issued_mask = 'd0;
@@ -118,9 +111,8 @@ module IQ (
     end
 
     // Full generation
-    int occupied_count;
     always_comb begin
-        occupied_count = 0;
+        automatic int occupied_count = 0;
         for (int i = 0; i < IQ_SIZE; i++) begin
             if (entries[i].valid)
                 occupied_count += 1;
