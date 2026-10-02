@@ -68,10 +68,10 @@ module IQ (
     end
 
     // Issued and inserted generation logic
-    int num_inserts, idx;
+    int num_inserts;
+    logic [IQ_BIT-1:0] idx;
     always_comb begin
         // Issue output and tracking setting
-
         num_wins = 'd0;
         winners = 'd0;
         issued_mask = 'd0;
@@ -83,30 +83,36 @@ module IQ (
         inserted = 'd0;
         inserted_entry = 'd0;
         for (int i = 0; i < IQ_SIZE; i++) begin
-            idx = (rr_count + i) % IQ_SIZE;
-
+            idx = rr_count + i;
             // Performing issue
-            if (entries[idx].src1_ready && entries[idx].src2_ready && entries[idx].valid && num_wins < PPL_WIDTH) begin
+            if (num_wins == PPL_WIDTH) begin
+                break;
+            end else if (entries[idx].src1_ready && entries[idx].src2_ready && entries[idx].valid) begin
                 winners[num_wins] = idx;
                 issued_mask[num_wins] = 1'b1;
                 issued_entries[num_wins] = entries[idx];
                 issued[idx] = 1'b1;
                 num_wins += 1;
             end
+        end
 
+        for (int i = 0; i < IQ_SIZE; i++) begin
             // Performing insertion
-            if (~entries[idx].valid && num_inserts < PPL_WIDTH && inserted_mask[num_inserts]) begin
-                inserted_entry[idx] = inserted_entries[num_inserts];
-                inserted[idx] = 1'b1;
-                // Check if any dependencies come back on the cycle the instruction is inserted
-                for (int j = 0; j < PPL_WIDTH; j++) begin
-                    if (inserted_entries[num_inserts].src1 == executed_preg[j] && executed_mask[j])
-                        inserted_entry[idx].src1_ready = 1'b1;
-                    if (inserted_entries[num_inserts].src2 == executed_preg[j] && executed_mask[j])
-                        inserted_entry[idx].src2_ready = 1'b1;
-                end
+            if (num_inserts == PPL_WIDTH) begin
+                break;
+            end else if (~entries[i].valid && inserted_mask[num_inserts]) begin
+                inserted_entry[i] = inserted_entries[num_inserts];
+                inserted[i] = 1'b1;
                 num_inserts += 1;
             end
+        end
+
+        // Check if any dependencies come back on the cycle the instruction is inserted
+        for (int i = 0; i < IQ_SIZE; i++) begin
+            if (executed_mask[i] && inserted_entry[i].src1 == executed_preg[i])
+                inserted_entry[i].src1_ready = 1'b1;
+            if (executed_mask[i] && inserted_entry[i].src2 == executed_preg[i])
+                inserted_entry[i].src2_ready = 1'b1;
         end
     end
 
