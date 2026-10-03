@@ -28,13 +28,15 @@ module IQ (
     // IQ entries
     iq_entry_t [IQ_SIZE-1:0] entries, inserted_entry;
     logic [IQ_SIZE-1:0] issued, inserted;
+    logic [ROB_BIT-1:0] adjusted_head;
+    assign adjusted_head = flush_index - rob_head;
     for (genvar X = 0; X < IQ_SIZE; X++) begin
         always_ff @(posedge clk) begin
             if (reset)
                 entries[X] <= 'd0;
             else if (flush_en) begin
                 // flush_index may or may not be relative
-                if (entries[X].rob_index - rob_head > flush_index - rob_head)
+                if (entries[X].rob_index - rob_head > adjusted_head)
                     entries[X].valid <= 1'b0;
             end else if (issued[X])
                 // Currently prevents same-cycle issue and insert
@@ -70,59 +72,81 @@ module IQ (
     // Issued and inserted generation logic
     int num_inserts;
     logic [IQ_BIT-1:0] idx;
+    logic [PPL_WIDTH-1:0][IQ_SIZE-1:0] val_map;
+    logic [PPL_WIDTH-1:0][IQ_SIZE-1:0] ins_map;
+    logic [PPL_WIDTH-1:0][IQ_BIT-1:0] idx_map;
     always_comb begin
         // Issue output and tracking setting
         num_wins = 'd0;
         winners = 'd0;
         issued_mask = 'd0;
-        issued_entries = 'd0;
-        issued = 'd0;
+        for (int i = 0; i < IQ_SIZE; i++) begin
+            val_map[0][i] = entries[i].valid && entries[i].src1_ready && entries[i].src2_ready;
+        end
+        for (int i = 0; i < PPL_WIDTH; i++) begin
+            for (logic [IQ_BIT:0] j = 0; j < IQ_SIZE; j++) begin
+                idx = rr_count + j;
+                if (val_map[i][idx]) begin
+                    winners[i] = idx;
+                    issued_mask[i] = 1'b1;
+                    num_wins += 1'b1;
+                    break;
+                end
+            end
+
+            // Set map for next stage
+            if (i < PPL_WIDTH - 1) begin
+                if (issued_mask[i])
+                    val_map[i+1] = val_map[i] & ~(IQ_SIZE'(1) << winners[i]);
+                else
+                    val_map[i+1] = 'd0;
+            end
+        end
 
         // Insert output and tracking setting
-        num_inserts = 0;
+        num_inserts = $countones(inserted_mask);
         inserted = 'd0;
         inserted_entry = 'd0;
+        idx_map = 'd0;
         for (int i = 0; i < IQ_SIZE; i++) begin
-            idx = rr_count + i;
-            // Performing issue
-            if (num_wins == PPL_WIDTH) begin
-                break;
-            end else if (entries[idx].src1_ready && entries[idx].src2_ready && entries[idx].valid) begin
-                winners[num_wins] = idx;
-                issued_mask[num_wins] = 1'b1;
-                issued_entries[num_wins] = entries[idx];
-                issued[idx] = 1'b1;
-                num_wins += 1;
-            end
+            ins_map[0][i] = ~entries[i].valid;
         end
-
-        for (int i = 0; i < IQ_SIZE; i++) begin
-            // Performing insertion
-            if (num_inserts == PPL_WIDTH) begin
-                break;
-            end else if (~entries[i].valid && inserted_mask[num_inserts]) begin
-                inserted_entry[i] = inserted_entries[num_inserts];
-                inserted[i] = 1'b1;
-                num_inserts += 1;
+        for (int i = 0; i < PPL_WIDTH; i++) begin
+            for (int j = 0; j < IQ_SIZE; j++) begin
+                if (ins_map[i][j] && i < num_inserts) begin
+                    inserted_entry[j] = inserted_entries[i];
+                    inserted[j] = 1'b1;
+                    idx_map[i] = j;
+                    break;
+                end
             end
-        end
 
-        // Check if any dependencies come back on the cycle the instruction is inserted
-        for (int i = 0; i < IQ_SIZE; i++) begin
-            if (executed_mask[i] && inserted_entry[i].src1 == executed_preg[i])
-                inserted_entry[i].src1_ready = 1'b1;
-            if (executed_mask[i] && inserted_entry[i].src2 == executed_preg[i])
-                inserted_entry[i].src2_ready = 1'b1;
+            // Set map for next stage
+            if (i < PPL_WIDTH - 1)
+                ins_map[i+1] = ins_map[i] & ~(IQ_SIZE'(1) << idx_map[i]);
+        end
+    end
+
+    // Output mapping
+    always_comb begin
+        issued = 'd0;
+        issued_entries = 'd0;
+        for (int i = 0; i < PPL_WIDTH; i++) begin
+            if (issued_mask[i]) begin
+                issued_entries[i] = entries[winners[i]];
+                issued[winners[i]] = 1'b1;
+            end
         end
     end
 
     // Full generation
+    logic [IQ_SIZE-1:0] valid_mask;
+    logic [IQ_BIT:0] occupied_count;
     always_comb begin
-        automatic int occupied_count = 0;
         for (int i = 0; i < IQ_SIZE; i++) begin
-            if (entries[i].valid)
-                occupied_count += 1;
+            valid_mask[i] = entries[i].valid;
         end
-        full = (occupied_count + PPL_WIDTH > IQ_SIZE);
     end
+    assign occupied_count = $countones(valid_mask);
+    assign full = (occupied_count + PPL_WIDTH > IQ_SIZE);
 endmodule: IQ
