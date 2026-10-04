@@ -45,6 +45,14 @@ module RRU (
 	input  logic [ROB_BIT-1:0] flush_index
 );
 
+	localparam int CKPT_NUM = 8;               // power of 2, >= PPL_WIDTH
+	localparam int CKPT_BIT = $clog2(CKPT_NUM);
+
+	logic [CKPT_NUM-1:0][ARCH_REG-1:0][PHYS_BIT-1:0] ckpt_rat;
+	logic [CKPT_NUM-1:0][ROB_BIT-1:0]                ckpt_rob;   // tag = ROB slot of the branch
+	logic [CKPT_BIT-1:0] ckpt_head;                              // oldest live snapshot
+	logic [CKPT_BIT:0]   ckpt_count;
+
     localparam logic [1:0] S_AVAIL = 2'b00;
     localparam logic [1:0] S_RNV   = 2'b01;
     localparam logic [1:0] S_RV    = 2'b10;
@@ -80,7 +88,6 @@ module RRU (
  
     // Full when fewer than PPL_WIDTH free pregs, i.e. the last lane found none.
     assign full  = !free_found[PPL_WIDTH-1];
-    assign stall = 1'b0;   // may be used for Task 6 recovery
  
     // Source renaming with intra-batch forwarding
     logic [PPL_WIDTH-1:0][PHYS_BIT-1:0] src1_p, src2_p;
@@ -143,22 +150,70 @@ module RRU (
             renamed_iq_entries[i].valid      = inserted_mask[i];
         end
     end
- 
-    // specRAT update
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            for (int a = 0; a < ARCH_REG; a++)
-                specRAT[a] <= PHYS_BIT'(a);
-        end else if (flush_en) begin
-            // TODO (Task 6): restore specRAT to its state right after the
-            // branch at flush_index was renamed. Incoming instructions this
-            // cycle are discarded, so no rename writes happen here.
-        end else begin
-            // Lanes in order: if several write the same areg, youngest wins.
-            for (int i = 0; i < PPL_WIDTH; i++)
-                if (inserted_mask[i])
-                    specRAT[inserted_entries[i].dest] <= free_preg[i];
-        end
-    end
 
+
+	logic [PPL_WIDTH-1:0][ARCH_REG-1:0][PHYS_BIT-1:0] lane_rat;
+	logic [PPL_WIDTH-1:0]               br_push;
+	logic [PPL_WIDTH-1:0][CKPT_BIT-1:0] br_slot;
+	logic [CKPT_BIT:0]                  n_push;
+
+	always_comb begin
+		logic [ARCH_REG-1:0][PHYS_BIT-1:0] cur;
+		cur = specRAT;  n_push = '0;
+		for (int i = 0; i < PPL_WIDTH; i++) begin
+			if (inserted_mask[i]) cur[inserted_entries[i].dest] = free_preg[i];
+			lane_rat[i] = cur;
+			br_push[i]  = inserted_mask[i] && inserted_entries[i].is_branch;
+			br_slot[i]  = ckpt_head + CKPT_BIT'(ckpt_count) + CKPT_BIT'(n_push);
+			if (br_push[i]) n_push++;
+		end
+	end
+	
+	logic [CKPT_BIT:0] n_pop;
+	always_comb begin
+		n_pop = '0;
+		for (int i = 0; i < PPL_WIDTH; i++)
+			if (removed_mask[i] && committed_mask[i] && removed_is_branch[i]) n_pop++;
+	end
+
+	logic                flush_found;
+	logic [CKPT_BIT-1:0] flush_slot;
+	logic [CKPT_BIT:0]   flush_keep;    // snapshots kept: everything up to and including the branch
+	always_comb begin
+		flush_found = 0; flush_slot = '0; flush_keep = '0;
+		for (int r = 0; r < CKPT_NUM; r++) begin
+			logic [CKPT_BIT-1:0] s;
+			s = ckpt_head + CKPT_BIT'(r);
+			if (r < ckpt_count && !flush_found && ckpt_rob[s] == flush_index) begin
+				flush_found = 1; flush_slot = s; flush_keep = (CKPT_BIT+1)'(r) + 1;
+			end
+		end
+	end
+
+
+	assign stall = flush_en | (committed_mask != removed_mask) | ((CKPT_NUM - ckpt_count) < PPL_WIDTH);
+
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			for (int a = 0; a < ARCH_REG; a++) specRAT[a] <= PHYS_BIT'(a);
+			ckpt_head <= '0;  ckpt_count <= '0;
+		end else if (flush_en) begin
+			// Discard this cycle's batch: no specRAT writes, no snapshot push.
+			if (flush_found) specRAT <= ckpt_rat[flush_slot];
+			ckpt_head  <= ckpt_head + CKPT_BIT'(n_pop);
+			ckpt_count <= (flush_found ? flush_keep : ckpt_count) - n_pop;   // the branch's own snapshot stays until it commits
+		end else begin
+			for (int i = 0; i < PPL_WIDTH; i++) begin
+				if (inserted_mask[i]) specRAT[inserted_entries[i].dest] <= free_preg[i];
+				if (br_push[i]) begin
+					ckpt_rat[br_slot[i]] <= lane_rat[i];
+					ckpt_rob[br_slot[i]] <= inserted_index[i];
+				end
+			end
+			ckpt_head  <= ckpt_head + CKPT_BIT'(n_pop);
+			ckpt_count <= ckpt_count + n_push - n_pop;
+		end
+	end
+
+	
 endmodule: RRU
