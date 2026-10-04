@@ -46,6 +46,7 @@ module ROB (
 		foreach (inserted_mask[i]) begin
         	insert_count += inserted_mask[i]; 
     	end
+		if (flushing) insert_count = '0;
 		remove_count = '0;
 		foreach (removed_mask[i]) begin
 			remove_count += removed_mask[i];
@@ -60,7 +61,7 @@ module ROB (
 	always_ff @(posedge clk) begin
 		if (reset) rob_insert_index <= '0;
 		else if (flushing) rob_insert_index <= rob_insert_index - remove_count;
-		else if (!flush_en) rob_insert_index <= rob_insert_index + insert_count;
+		else rob_insert_index <= rob_insert_index + insert_count;
 
 		if (reset) rob_remove_index <= '0;
 		else rob_remove_index <= rob_remove_index + $countones(committed_mask);
@@ -109,12 +110,12 @@ module ROB (
 				rem_idx = rob_insert_index - ROB_BIT'(i)-1;
 				removed_entries[i] = rob_buffer_queue[rem_idx];
 
-				removed_mask[i] = (rob_buffer_queue[rem_idx].valid) & (rem_idx > flush_index_reg);
-				next_rob_buffer_queue[rem_idx].valid = ~removed_mask[i];
+				removed_mask[i] = rob_buffer_queue[rem_idx].valid & (i < int'(flush_count));
+				if (removed_mask[i]) next_rob_buffer_queue[rem_idx].valid = 1'b0;
 			end
 		end
 		// 2) Insert at the tail (wrapping)
-		if (!flush_en) begin
+		if (!flushing) begin
 			for (int i = 0; i < PPL_WIDTH; i++) begin
 				if (inserted_mask[i]) begin
 					ins_idx                                    = rob_insert_index + ROB_BIT'(i);
@@ -126,7 +127,6 @@ module ROB (
 			end
 		end
 
-		assign next_flush = (flush_en) | (flushing & (flush_count > 4));
 		// 3) Mark executed entries as completed
 		for (int i = 0; i < PPL_WIDTH; i++) begin
 			if (executed_mask[i])
@@ -136,11 +136,12 @@ module ROB (
 	always_comb begin
 		next_flush_count = 0;
 		if (flush_en) begin
-			if (rob_insert_index>flush_index) next_flush_count = rob_insert_index - flush_index -1;
-			else next_flush_count = ROB_SIZE - (flush_index - rob_insert_index) -1;
+			// entries younger than the branch, incl. the batch inserted this cycle (wrap-safe)
+			next_flush_count = rob_insert_index + insert_count - flush_index - 1'b1;
 		end
 		else if (flushing) next_flush_count = flush_count - remove_count;
 	end
+	assign next_flush = (next_flush_count != '0);
 	assign rob_head = rob_remove_index;
 
 	logic [$clog2(ROB_SIZE):0] entry_count, comb_entry_count;
@@ -152,4 +153,5 @@ module ROB (
 	end
 
 	assign full = (ROB_SIZE - entry_count) < PPL_WIDTH;
+	
 endmodule: ROB

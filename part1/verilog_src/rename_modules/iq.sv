@@ -30,14 +30,20 @@ module IQ (
     logic [IQ_SIZE-1:0] issued, inserted;
     logic [ROB_BIT-1:0] adjusted_head;
     assign adjusted_head = flush_index - rob_head;
+
+   
     for (genvar X = 0; X < IQ_SIZE; X++) begin
         always_ff @(posedge clk) begin
             if (reset)
                 entries[X] <= 'd0;
-            else if (flush_en) begin
-                // flush_index may or may not be relative
-                if (entries[X].rob_index - rob_head > adjusted_head)
+                else if (flush_en) begin
+                if ((entries[X].rob_index - rob_head > adjusted_head) || issued[X])
                     entries[X].valid <= 1'b0;
+                else if (entries[X].valid)
+                    for (int Y = 0; Y < PPL_WIDTH; Y++) begin
+                        if ((entries[X].src1 == executed_preg[Y]) && executed_mask[Y]) entries[X].src1_ready <= 1'b1;
+                        if ((entries[X].src2 == executed_preg[Y]) && executed_mask[Y]) entries[X].src2_ready <= 1'b1;
+                    end
             end else if (issued[X])
                 // Currently prevents same-cycle issue and insert
                 entries[X].valid <= 1'b0;
