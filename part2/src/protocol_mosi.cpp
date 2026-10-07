@@ -1,7 +1,7 @@
 // MOSI -- Modified, Owner, Shared, Invalid.            [ YOU IMPLEMENT THIS ]
 //
-// MOSI is MSI plus one state. O is a line that is dirty AND shared: this 
-// cache has written it, other caches now hold readable copies of it, and memory 
+// MOSI is MSI plus one state. O is a line that is dirty AND shared: this
+// cache has written it, other caches now hold readable copies of it, and memory
 // is still stale.
 //
 // WHERE TO LOOK
@@ -41,21 +41,13 @@ namespace {
 std::optional<BusReqType> MOSIProtocol::request_for(AccessType access, CacheState state) const {
   switch (state) {
   case CacheState::I:
-    // TODO:
-    break;
-
+    return access == AccessType::Read ? BusReqType::Read : BusReqType::ReadX;
   case CacheState::S:
-    // TODO:
-    break;
-
+    return access == AccessType::Read ? std::optional<BusReqType>{std::nullopt} : BusReqType::Upgrade;
   case CacheState::O:
-    // TODO:
-    break;
-
+    return access == AccessType::Read ? std::optional<BusReqType>{std::nullopt} : BusReqType::Upgrade;
   case CacheState::M:
-    // TODO:
-    break;
-
+    return std::nullopt;
   default:
     // E belongs to MESI and MOESI; MOSI can never produce it.
     protocol_detail::reject_state(name(), access, state, "M, O, S and I");
@@ -77,13 +69,11 @@ std::optional<BusReqType> MOSIProtocol::request_for(AccessType access, CacheStat
 //   decision.writeback_needed   true if memory must be written
 ProtocolDecision MOSIProtocol::on_request(BusReqType type, uint32_t requestor_id,
                                           const std::vector<CacheState> &peer_states) const {
-  // Remove these two lines once you use the parameters.
-  (void)requestor_id;
-  (void)peer_states;
+  ProtocolDecision decision;
 
   switch (type) {
-  case BusReqType::Read:
-    // TODO: somebody wants a readable copy.
+  case BusReqType::Read: {
+    // somebody wants a readable copy.
     //   - Several caches might be able to supply it. If one of them holds the
     //     only up-to-date copy, it is the one you want.
     //   - This is where O is created. A modified holder is about to stop being
@@ -91,27 +81,59 @@ ProtocolDecision MOSIProtocol::on_request(BusReqType type, uint32_t requestor_id
     //     point is that it does not have to. What should that holder become,
     //     and what does it stay responsible for?
     //   - Where does the requestor end up? MOSI has no E state.
+    const auto supplier = find_supplier(peer_states, requestor_id, {CacheState::M, CacheState::O, CacheState::S});
+    if (supplier) {
+        decision.data_from_peer = true;
+        decision.supplier_id = *supplier;
+        if (peer_states[*supplier] == CacheState::M) {
+            // No writeback needed now, just become O
+            decision.peer_transitions.push_back({*supplier, CacheState::O});
+        }
+    }
+    // Requestor becomes shared
+    decision.requestor_state = CacheState::S;
     break;
+  }
 
-  case BusReqType::ReadX:
-    // TODO: somebody wants to write a line it does not hold.
+  case BusReqType::ReadX: {
+    // somebody wants to write a line it does not hold.
     //   - No other cache may keep a copy afterwards, including the owner.
     //   - The requestor is about to become the new holder of this data. If a
     //     peer's copy was dirty, does memory need to hear about it?
+    const auto supplier = find_supplier(peer_states, requestor_id, {CacheState::M, CacheState::O, CacheState::S});
+    if (supplier) {
+        decision.data_from_peer = true;
+        decision.supplier_id = *supplier;
+        // Flush vals from everyone else - no invalidate needed
+        for (uint32_t holder : find_holders(peer_states, requestor_id)) {
+            decision.peer_transitions.push_back({holder, CacheState::I});
+        }
+    }
+    decision.requestor_state = CacheState::M;
     break;
+  }
 
-  case BusReqType::Upgrade:
-    // TODO: the requestor already holds a readable copy -- possibly as the
+  case BusReqType::Upgrade: {
+    // the requestor already holds a readable copy -- possibly as the
     // owner of a dirty line -- and now wants to write it.
     //   - Which peers must lose their copy?
     //   - If one of them was the owner, its dirty value is about to be
     //     overwritten by the requestor. Does memory need to see it first?
-    break;
-
-  case BusReqType::Writeback:
-    // TODO: the requestor is evicting a dirty line. Note that under MOSI a
-    // line can be dirty in two different states. No peer is involved.
+    for (uint32_t holder : find_holders(peer_states, requestor_id)) {
+        decision.peer_transitions.push_back({holder, CacheState::I});
+    }
+    decision.requestor_state = CacheState::M;
     break;
   }
-  not_implemented("on_request");
+
+  case BusReqType::Writeback: {
+    // the requestor is evicting a dirty line. Note that under MOSI a
+    // line can be dirty in two different states. No peer is involved.
+    // Both invalidate, shared cores can remain in shared
+    decision.requestor_state = CacheState::I;
+    decision.writeback_needed = true;
+    break;
+  }
+  }
+  return decision;
 }

@@ -42,21 +42,14 @@ namespace {
 std::optional<BusReqType> MESIProtocol::request_for(AccessType access, CacheState state) const {
   switch (state) {
   case CacheState::I:
-    // TODO:
-    break;
-
+        return access == AccessType::Read ? BusReqType::Read : BusReqType::ReadX;
   case CacheState::S:
-    // TODO:
-    break;
-
+        return access == AccessType::Read ? std::optional<BusReqType>{std::nullopt} : BusReqType::Upgrade;
   case CacheState::E:
-    // TODO:
-    break;
-
+        // Something else will have to do the state transition
+        return std::nullopt;
   case CacheState::M:
-    // TODO:
-    break;
-
+        return std::nullopt;
   default:
     // O belongs to MOSI and MOESI; MESI can never produce it.
     protocol_detail::reject_state(name(), access, state, "M, E, S and I");
@@ -78,38 +71,78 @@ std::optional<BusReqType> MESIProtocol::request_for(AccessType access, CacheStat
 //   decision.writeback_needed   true if memory must be written
 ProtocolDecision MESIProtocol::on_request(BusReqType type, uint32_t requestor_id,
                                           const std::vector<CacheState> &peer_states) const {
-  // Remove these two lines once you use the parameters.
-  (void)requestor_id;
-  (void)peer_states;
+  ProtocolDecision decision;
 
   switch (type) {
-  case BusReqType::Read:
-    // TODO: somebody wants a readable copy.
+  case BusReqType::Read: {
+    // somebody wants a readable copy.
     //   - Can any cache supply it, and if several could, which should?
     //   - What happens to a peer that was the only holder?
     //   - Where does the requestor end up, and does that depend on whether
     //     anyone else held the line? This is where E is reached.
     //   - MESI has no O state. If the supplier's copy was dirty, and it is
     //     about to stop being the only holder, where does that data go?
+    const auto supplier = find_supplier(peer_states, requestor_id, {CacheState::M, CacheState::E, CacheState::S});
+    if (supplier) {
+        decision.data_from_peer = true;
+        decision.supplier_id = *supplier;
+        if (peer_states[*supplier] == CacheState::M) {
+            // Force writeback
+            decision.peer_transitions.push_back({*supplier, CacheState::S});
+            decision.writeback_needed = true;
+        } else if (peer_states[*supplier] == CacheState::E) {
+            // If exclusive need to become shared
+            decision.peer_transitions.push_back({*supplier, CacheState::S});
+        }
+        // Requestor must transition to shared
+        decision.requestor_state = CacheState::S;
+    } else {
+        // If no supplier, then requestor becomes exclusive
+        decision.requestor_state = CacheState::E;
+    }
     break;
+  }
 
-  case BusReqType::ReadX:
-    // TODO: somebody wants to write a line it does not hold.
+  case BusReqType::ReadX: {
+    // somebody wants to write a line it does not hold.
     //   - No other cache may keep a copy afterwards.
     //   - Can a peer still supply the data, saving a memory read?
     //   - Same dirty-data question as above.
+    const auto supplier = find_supplier(peer_states, requestor_id, {CacheState::M, CacheState::E, CacheState::S});
+    if (supplier) {
+        decision.data_from_peer = true;
+        decision.supplier_id = *supplier;
+        if (peer_states[*supplier] == CacheState::M) {
+            decision.writeback_needed = true;
+        }
+        // If no supplier, no peer holders
+        for (uint32_t holder : find_holders(peer_states, requestor_id)) {
+            decision.peer_transitions.push_back({holder, CacheState::I});
+        }
+    }
+    decision.requestor_state = CacheState::M;
     break;
+  }
 
-  case BusReqType::Upgrade:
-    // TODO: the requestor already holds a readable copy and now wants to
+  case BusReqType::Upgrade: {
+    // the requestor already holds a readable copy and now wants to
     // write it.
     //   - Which peers must lose their copy?
     //   - Does any data move? Does memory need to be touched at all?
-    break;
-
-  case BusReqType::Writeback:
-    // TODO: the requestor is evicting a dirty line. No peer is involved.
+    // Invalidate other holders
+    for (uint32_t holder : find_holders(peer_states, requestor_id)) {
+        decision.peer_transitions.push_back({holder, CacheState::I});
+    }
+    decision.requestor_state = CacheState::M;
     break;
   }
-  not_implemented("on_request");
+
+  case BusReqType::Writeback: {
+    // the requestor is evicting a dirty line. No peer is involved.
+    decision.requestor_state = CacheState::I;
+    decision.writeback_needed = true;
+    break;
+  }
+  }
+  return decision;
 }
